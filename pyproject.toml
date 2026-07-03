@@ -1,0 +1,12 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hal9000"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = ["aiohttp", "httpx"]
+
+[project.scripts]
+hal9000 = "daemon.__main__:main"

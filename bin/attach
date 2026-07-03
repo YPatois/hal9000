@@ -1,0 +1,14 @@
+#!/bin/bash
+# Send input to HAL9000 agent
+# Usage: ./bin/attach "Your message"
+
+cd "$(dirname "$0")"/..
+
+if [ $# -eq 0 ]; then
+    echo "Usage: $0 \"message to agent\""
+    exit 1
+fi
+
+INPUT="$1"
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] [Operator] $INPUT" >> logs/actions/$(date +%Y-%m-%d).log
+echo "Message logged to operator channel"

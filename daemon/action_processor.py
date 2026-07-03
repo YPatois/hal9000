@@ -1,0 +1,45 @@
+"""Action processor for the HAL9000 daemon."""
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+from typing import Any
+
+
+class ActionExtractor:
+    """Extracts actions from agent responses and parses them into structured format."""
+    
+    def parse_response(self, response: str) -> tuple[str, list[dict[str, Any]]]:
+        """Split response into text and actions.
+        
+        Actions are extracted from code blocks with language 'action' or specific markers.
+        """
+        action_pattern = r"```action\s*\n([\s\S]*?)\n```"
+        matches = re.findall(action_pattern, response)
+        
+        actions = []
+        for match in matches:
+            try:
+                action = json.loads(match.strip())
+                actions.append(action)
+            except json.JSONDecodeError:
+                pass
+        
+        text = re.sub(action_pattern, "", response).strip()
+        return text, actions
+
+
+def main() -> None:
+    """Parse a sample response from stdin."""
+    import sys
+    
+    response = sys.stdin.read()
+    extractor = ActionExtractor()
+    text, actions = extractor.parse_response(response)
+    
+    print(json.dumps({"text": text, "actions": actions}, indent=2))
+
+
+if __name__ == "__main__":
+    main()

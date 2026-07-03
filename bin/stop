@@ -1,0 +1,5 @@
+#!/bin/bash
+cd "$(dirname "$0")"/..
+echo "Stopping HAL9000..."
+docker compose -f compose.yaml down
+echo "Agent stopped."

@@ -14,20 +14,31 @@ class ContextBuilder:
         self.preprompt = preprompt
         self.max_turns = max_turns
 
-    def build(self, agent_state: dict[str, Any], recent_logs: list[dict[str, Any]]) -> str:
+    def build(
+        self,
+        agent_state: dict[str, Any],
+        recent_logs: list[dict[str, Any]],
+        operator_messages: list[dict[str, Any]] | None = None,
+    ) -> str:
         """Build context string for the agent."""
         parts = [self.preprompt, "\n"]
-        
+
+        if operator_messages:
+            parts.append("[Operator Messages]\n")
+            for msg in operator_messages:
+                parts.append(f"  [{msg.get('timestamp', '?')}] Operator: {msg.get('text', '')}\n")
+            parts.append("\n")
+
         if agent_state.get("last_summary"):
             parts.append(f"[Agent State] {agent_state['last_summary']}\n")
-        
+
         if recent_logs:
             parts.append("[Log History]\n")
             for log in recent_logs[-self.max_turns:]:
                 ts = log.get("timestamp", log.get("ts", "?"))
-                text = log.get("text", log.get("content", json.dumps(log))[:200])
+                text = log.get("text", log.get("content", json.dumps(log))[:1000])
                 parts.append(f"  [{ts}] {text}\n")
-        
+
         parts.append(f"\n[Turn {datetime.now(timezone.utc).isoformat()}] Execute your next action or record a thought.\n")
-        
+
         return "".join(parts)

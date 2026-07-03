@@ -2,6 +2,12 @@
 set -euo pipefail
 cd "$(dirname "$0")"/..
 
+for d in logs thoughts actions updates workspace state; do
+    mkdir -p "$d"
+done
+
 echo "Starting HAL9000..."
-docker compose -f compose.yaml build && docker compose -f compose.yaml up -d
-echo "Agent started. View logs with: docker compose -f compose.yaml logs -f hal9000"
+docker compose -f compose.yaml -p hal9000 build && docker compose -f compose.yaml -p hal9000 up -d
+echo "Agent started."
+echo "  View live logs: docker compose -f compose.yaml -p hal9000 logs -f hal9000"
+echo "  Capture to host: ./bin/capture-logs"

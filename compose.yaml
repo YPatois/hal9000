@@ -5,9 +5,9 @@ services:
       dockerfile: Dockerfile
     network_mode: host
     volumes:
-      - ./logs:/var/log/hal9000
-      - workspace_data:/workspace
-      - state_data:/state
+      - ./logs:/var/log/hal9000:ro
+      - ./workspace:/workspace
+      - ./state:/state
     environment:
       - PYTHONUNBUFFERED=1
       - HAL9000_MODEL
@@ -20,7 +20,3 @@ services:
           memory: 4G
           cpus: '2'
     stop_signal: SIGTERM
-
-volumes:
-  workspace_data:
-  state_data:

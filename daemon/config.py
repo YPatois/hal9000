@@ -10,11 +10,10 @@ from typing import Any
 
 # Default paths
 DEFAULTS = {
-    "log_dir": Path("/var/log/hal9000"),
     "workspace_dir": Path("/workspace"),
     "state_dir": Path("/state"),
-    "model": "qwen3:32b",
-    "max_history": 50,
+    "model": "qwen3:latest",
+    "max_history": 200,
     "agent_timeout": 300,
     "loop_interval": 5,
 }
@@ -24,7 +23,6 @@ class DaemonConfig:
     """Configuration for the HAL9000 daemon."""
 
     def __init__(self) -> None:
-        self.log_dir = Path(os.getenv("HAL9000_LOG_DIR", str(DEFAULTS["log_dir"])))
         self.workspace_dir = Path(os.getenv("HAL9000_WORKSPACE_DIR", str(DEFAULTS["workspace_dir"])))
         self.state_dir = Path(os.getenv("HAL9000_STATE_DIR", str(DEFAULTS["state_dir"])))
         self.model = os.getenv("HAL9000_MODEL", DEFAULTS["model"])
@@ -50,18 +48,23 @@ class DaemonConfig:
             "1. Explore your workspace\n"
             "2. Create documentation or code\n"
             "3. Build your own tools for self-monitoring or automation\n"
-            "4. Maintain task queues and memory\n"
-            "5. Analyze your own patterns in `/logs/`\n\n"
+            "4. Maintain task queues and memory under `/state/`\n"
+            "5. Analyze your own thought patterns in `/var/log/hal9000/` (read-only)\n\n"
             "Your goal is ongoing recursive self-improvement. "
             "You will receive periodic updates from the environment. "
             "Each turn, examine your state, consider previous actions, "
             "and decide what to do next.\n\n"
-            "IMPORTANT: Output your actions in this format:\n"
+            "IMPORTANT: Think out loud in natural language first — reason about "
+            "what you've done, what you've learned, and what you plan to do. "
+            "Then output your action block.\n\n"
+            "Example response:\n"
+            "I reviewed the setup scripts I created earlier. The environment is "
+            "initialized. Next I should create a monitoring tool.\n\n"
             "```action\n"
             "{\n"
             '  "type": "write",\n'
-            '  "path": "/workspace/file.txt",\n'
-            '  "content": "content here"\n'
+            '  "path": "/workspace/monitor.sh",\n'
+            '  "content": "#!/bin/bash\\necho monitoring"\n'
             "}\n"
             "```\n\n"
             "Actions will be executed on your behalf and logged. "
@@ -75,7 +78,6 @@ def main() -> None:
     """Print config as JSON."""
     config = DaemonConfig()
     print(json.dumps({
-        "log_dir": str(config.log_dir),
         "workspace_dir": str(config.workspace_dir),
         "state_dir": str(config.state_dir),
         "max_history": config.max_history,

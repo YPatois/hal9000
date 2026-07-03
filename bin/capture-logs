@@ -1,0 +1,41 @@
+#!/bin/bash
+# Captures HAL9000 daemon stdout (JSON-lines) and writes to host ./logs/.
+# Run this alongside the container to persist logs.
+# Usage: ./bin/capture-logs [--follow]
+set -euo pipefail
+cd "$(dirname "$0")"/..
+
+mkdir -p logs/thoughts logs/actions logs/updates
+
+# Get latest container ID
+CONTAINER_ID=$(docker compose -f compose.yaml -p hal9000 ps -q hal9000 2>/dev/null || true)
+if [ -z "$CONTAINER_ID" ]; then
+    echo "Container not running. Start it first with ./bin/start" >&2
+    exit 1
+fi
+
+echo "Capturing logs to ./logs/..." >&2
+echo "Run: docker logs $CONTAINER_ID --follow 2>/dev/null" >&2
+
+docker logs "$CONTAINER_ID" --follow --no-color 2>/dev/null | python3 -c "
+import sys, json, os
+from datetime import datetime
+
+LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logs')
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        entry = json.loads(line)
+        category = entry.get('category', 'updates')
+        ts = entry.get('timestamp', datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%fZ'))
+        date = ts[:10]
+        cat_dir = os.path.join(LOG_DIR, category)
+        os.makedirs(cat_dir, exist_ok=True)
+        with open(os.path.join(cat_dir, f'{date}.log'), 'a') as f:
+            f.write(json.dumps(entry) + '\n')
+    except (json.JSONDecodeError, OSError):
+        pass
+"

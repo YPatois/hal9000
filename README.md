@@ -46,7 +46,7 @@ Key design:
 ./bin/stop
 
 # Follow live logs
-docker compose -f compose.yaml logs -f hal9000
+docker compose -f compose.yaml -p hal9000 logs -f hal9000
 ```
 
 ## Configuration

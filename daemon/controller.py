@@ -4,16 +4,14 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
 import signal
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import aiohttp
-import httpx
 
 from daemon.config import DaemonConfig
 from daemon.context_builder import ContextBuilder
@@ -31,17 +29,20 @@ class LoopDaemon:
         self.config = config
         self.running = True
         self.turn = 0
-        self.log = LogRecord(config.log_dir)
+        self.log = LogRecord(max_history=config.max_history)
         self.ctx = ContextBuilder(config.preprompt)
-        self.actions = ActionExecutor(config.workspace_dir)
+        self.actions = ActionExecutor(config.workspace_dir, config.state_dir)
         self.extractor = ActionExtractor()
         
         self._agent_state: dict[str, Any] = {}
         state_file = config.state_dir / "state.json"
         if state_file.exists():
-            self._agent_state = json.loads(state_file.read_text())
+            saved = json.loads(state_file.read_text())
+            self._agent_state = saved.get("agent", {})
+            self.turn = saved.get("turn", 0)
+            self.log.restore(saved.get("recent_logs", []))
         
-        self._session = aiohttp.ClientSession()
+        self._session: aiohttp.ClientSession | None = None
 
     def _save_state(self) -> None:
         state = {
@@ -49,6 +50,7 @@ class LoopDaemon:
             "start_time": self.config.start_time,
             "last_updated": datetime.now(timezone.utc).isoformat(),
             "agent": self._agent_state,
+            "recent_logs": self.log.all_entries(),
         }
         self.config.state_dir.mkdir(parents=True, exist_ok=True)
         (self.config.state_dir / "state.json").write_text(json.dumps(state, indent=2))
@@ -64,12 +66,33 @@ class LoopDaemon:
             "result": result,
         })
 
+    def _read_operator_messages(self) -> list[dict[str, Any]]:
+        """Read and remove operator messages from the inbox."""
+        inbox = self.config.state_dir / "inbox"
+        if not inbox.exists():
+            return []
+        messages = []
+        for f in sorted(inbox.glob("*.json")):
+            try:
+                messages.append(json.loads(f.read_text()))
+                f.unlink()
+            except (json.JSONDecodeError, OSError):
+                pass
+        return messages
+
     def _build_context(self) -> str:
         recent = self.log.recent_entries(self.config.max_history, ["thoughts", "actions", "updates"])
-        return self.ctx.build(self._agent_state, recent)
+        operator_msgs = self._read_operator_messages()
+        return self.ctx.build(self._agent_state, recent, operator_messages=operator_msgs)
+
+    async def _ensure_session(self) -> aiohttp.ClientSession:
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
 
     async def call_agent(self, context: str) -> tuple[str, float]:
         """Call Ollama and get a response. THIS IS THE ONLY PLACE OLLAMA IS CALLED."""
+        session = await self._ensure_session()
         payload = json.dumps({
             "model": self.config.model,
             "prompt": context,
@@ -77,7 +100,7 @@ class LoopDaemon:
         })
         
         start = time.time()
-        async with self._session.post(
+        async with session.post(
             f"{OLLAMA_URL}/api/generate",
             data=payload,
             headers={"Content-Type": "application/json"},
@@ -174,7 +197,8 @@ class LoopDaemon:
         print("\n[daemon] Shutting down...", file=sys.stderr)
         self.running = False
         self._save_state()
-        await self._session.close()
+        if self._session and not self._session.closed:
+            await self._session.close()
         sys.exit(0)
 
 

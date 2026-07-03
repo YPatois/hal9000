@@ -1,6 +1,7 @@
 """Configuration for the HAL9000 daemon."""
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path

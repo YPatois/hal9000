@@ -4,74 +4,73 @@ Autonomous recursive reasoning agent research.
 
 A sandboxed agent that maintains an ongoing inner monologue, thinks about whatever it finds meaningful, and produces tangible outputs — all running autonomously across weeks or longer.
 
-## How it works
+## Architecture
 
 ```
-┌─────────────────────────┐    ┌──────────────────────────┐
-│  Host (daemon)          │    │  Docker container (agent)│
-│                         │    │  (sandboxed, no network) │
-│  loop_daemon ──→ Ollama │    │                          │
-│                         │    │  agent/processor (dumb   │
-│  (only caller with      │    │   stdin/stdout relay)    │
-│   Ollama access)        │    │                          │
-│  All actions & logs     │    │  Can read logs (RO)      │
-│  managed by daemon      │    │  Can write /workspace/   │
-└─────────────────────────┘    └──────────────────────────┘
+One Docker container (network_mode: host, resource-limited)
+┌───────────────────────────────────────┐
+│  daemon/controller.py                  │
+│    ↓ calls Ollama on localhost:11434   │
+│    ↓ logs everything to /var/log/      │
+│    ↓ executes actions in /workspace/   │
+│    ↓ maintains state in /state/        │
+│                                        │
+│  agent/processor.py (unused stub)     │
+└───────────────────────────────────────┘
 ```
 
-Key design decisions:
-- **Tamper-proof logging**: Agent never touches its own trace. The daemon calls Ollama, executes actions, and logs everything. Logs are on the host outside the container.
-- **Minimal agent**: The agent process is a dumb stdin/stdout relay. No Ollama library, no network stack, no filesystem awareness beyond its sandbox.
+Key design:
+- **Tamper-proof logging**: The daemon is the only thing that calls Ollama and writes logs. The agent (LLM output) never touches its own trace.
+- **Minimal surface**: Container has no public ports. Network is host-mode only to reach Ollama. No extra services.
 - **Recursive**: Agent can read and analyze its own logs, build tools, maintain state — all autonomously.
-- **Persistent**: Named Docker volumes survive restarts. Agent maintains its own state files.
+- **Persistent**: Named Docker volumes survive restarts.
 
 ## Prerequisites
 
-- Docker + compose v2
-- Local Ollama instance running on `localhost:11434` with a model loaded (e.g. `ollama pull qwen3`)
-- Python 3.10+
+- Docker + Compose v2
+- Local Ollama on `localhost:11434` with a model (e.g. `ollama pull qwen3`)
 
 ## Run
 
 ```
-# Start the agent (daemon + container, detached)
+# Build and start the agent (detached)
 ./bin/start
 
-# View status
+# View status and recent logs
 ./bin/status
 
-# Send a task to the agent
+# Send a task
 ./bin/attach "Write a recursive function that explores the workspace"
 
 # Stop the agent
 ./bin/stop
 
-# Clear state and restart
-./bin/reset
+# Follow live logs
+docker compose -f compose.yaml logs -f hal9000
 ```
 
-## Config
+## Configuration
 
-Set environment variables to customize:
+Set environment variables before `./bin/start`:
 
 ```
-HAL9000_MODEL=              # Ollama model (default: qwen3:32b)
-HAL9000_MAX_HISTORY=        # Recent log entries included in context (default: 50)
-HAL9000_LOOP_INTERVAL=      # Seconds between turns (default: 5)
-HAL9000_AGENT_TIMEOUT=      # Ollama API timeout in seconds (default: 300)
-HAL9000_START_TIME=         # Initial timestamp
+export HAL9000_MODEL=qwen3:32b          # Ollama model (default: qwen3:32b)
+export HAL9000_MAX_HISTORY=50           # Recent turns in context
+export HAL9000_LOOP_INTERVAL=5          # Seconds between turns
+export HAL9000_AGENT_TIMEOUT=300        # Ollama timeout
 ```
 
 ## Files
 
-- `daemon/controller.py` — The immortal controller. Calls Ollama, manages the loop.
-- `agent/processor.py` — Dumb agent. stdin → response → stdout.
-- `daemon/action_executor.py` — Executes agent actions on the host.
-- `daemon/log_record.py` — Immutable log management.
-- `daemon/config.py` — Configuration + agent preprompt.
-- `compose.yaml` — Container networking + volumes.
-- `pyproject.toml` — Dependencies + project config.
+- `daemon/controller.py` — Core loop: calls Ollama, logs, executes actions
+- `daemon/config.py` — Configuration + agent preprompt
+- `daemon/log_record.py` — Immutable log management (agent can't modify)
+- `daemon/action_executor.py` — Executes agent actions in /workspace/
+- `daemon/action_processor.py` — Parses ` ```action` blocks from LLM output
+- `daemon/context_builder.py` — Builds prompt context from state + logs
+- `agent/processor.py` — Stub for testing without Ollama (not used by default)
+- `compose.yaml` — Single Docker service, host network, persistent volumes
 
 ## License
 
-DSSL (Do Source Code Source license)
+DSSL — Demerden Sie Sich License

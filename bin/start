@@ -3,5 +3,5 @@ set -euo pipefail
 cd "$(dirname "$0")"/..
 
 echo "Starting HAL9000..."
-docker compose -f compose.yaml up -d
-echo "Agent started. View logs with: docker compose -f compose.yaml logs -f daemon"
+docker compose -f compose.yaml build && docker compose -f compose.yaml up -d
+echo "Agent started. View logs with: docker compose -f compose.yaml logs -f hal9000"

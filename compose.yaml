@@ -1,18 +1,19 @@
-version: '3.8'
-
 services:
-  agent:
+  hal9000:
     build:
       context: .
-      dockerfile: Dockerfile.agent
+      dockerfile: Dockerfile
+    network_mode: host
     volumes:
+      - ./logs:/var/log/hal9000
       - workspace_data:/workspace
       - state_data:/state
-      - agent_logs:/var/log/hal9000
-      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - PYTHONUNBUFFERED=1
-      - HAL9000_OLLAMA_URL
+      - HAL9000_MODEL
+      - HAL9000_MAX_HISTORY
+      - HAL9000_LOOP_INTERVAL
+      - HAL9000_AGENT_TIMEOUT
     deploy:
       resources:
         limits:
@@ -20,28 +21,6 @@ services:
           cpus: '2'
     stop_signal: SIGTERM
 
-  daemon:
-    build:
-      context: .
-      dockerfile: Dockerfile.daemon
-    volumes:
-      - workspace_data:/workspace
-      - state_data:/state
-      - agent_logs:/var/log/hal9000
-      - /var/run/docker.sock:/var/run/docker.sock
-    environment:
-      - PYTHONUNBUFFERED=1
-      - HAL9000_OLLAMA_URL
-    depends_on:
-      - agent
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-          cpus: '1'
-    stop_signal: SIGTERM
-
 volumes:
   workspace_data:
   state_data:
-  agent_logs:

@@ -6,6 +6,7 @@ from __future__ import annotations
 import atexit
 import json
 import os
+import re
 import signal
 import socket
 import sys
@@ -19,6 +20,20 @@ from host.logger import FileLogger
 from host.ollama_client import OllamaClient
 
 PID_FILE = "host.pid"
+
+
+def parse_tags(text: str) -> tuple[str, str]:
+    """Extract <thinking> and <reflection> content from response text.
+    Returns (thinking, reflection)."""
+    thinking = ""
+    match = re.search(r"<thinking>(.*?)</thinking>", text, re.DOTALL)
+    if match:
+        thinking = match.group(1).strip()
+    reflection = ""
+    match = re.search(r"<reflection>(.*?)</reflection>", text, re.DOTALL)
+    if match:
+        reflection = match.group(1).strip()
+    return thinking, reflection
 
 
 class HostDaemon:
@@ -83,10 +98,14 @@ class HostDaemon:
         turn = self._agent_state.get("turn", 0) + 1
         self._agent_state["turn"] = turn
 
+        thinking, reflection = parse_tags(response)
+
         entry: dict[str, Any] = {
             "type": "thought",
             "turn": turn,
             "text": response,
+            "thinking": thinking if thinking else None,
+            "reflection": reflection if reflection else None,
             "duration_ms": int(duration * 1000),
             "model": self.config.model,
         }

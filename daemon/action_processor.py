@@ -12,12 +12,13 @@ class ActionExtractor:
     
     def parse_response(self, response: str) -> tuple[str, list[dict[str, Any]]]:
         """Split response into text and actions.
-        
+
         Actions are extracted from code blocks with language 'action' or specific markers.
+        <thinking> and <reflection> tags are stripped from the returned text.
         """
         action_pattern = r"```action\s*\n([\s\S]*?)\n```"
         matches = re.findall(action_pattern, response)
-        
+
         actions = []
         for match in matches:
             try:
@@ -25,8 +26,9 @@ class ActionExtractor:
                 actions.append(action)
             except json.JSONDecodeError:
                 pass
-        
+
         text = re.sub(action_pattern, "", response).strip()
+        text = re.sub(r"</?thinking>|</?reflection>", "", text).strip()
         return text, actions
 
 

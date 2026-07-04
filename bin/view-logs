@@ -1,0 +1,38 @@
+#!/bin/bash
+# Start the HAL9000 log viewer (HTTP server at :8080).
+set -euo pipefail
+cd "$(dirname "$0")"/..
+
+# Check Python
+PYTHON=""
+for cmd in python3 python; do
+    if command -v "$cmd" &>/dev/null; then
+        PYTHON="$cmd"
+        break
+    fi
+done
+if [ -z "$PYTHON" ]; then
+    echo "ERROR: No Python interpreter found" >&2
+    exit 1
+fi
+
+# Use the host venv if it exists
+if [ -d .venv-host ]; then
+    PY="$PWD/.venv-host/bin/python"
+else
+    PY="$PYTHON"
+fi
+
+PORT="${HAL9000_VIEWER_PORT:-8080}"
+
+# Check if port is already in use
+if lsof -i ":$PORT" &>/dev/null 2>&1; then
+    echo "Viewer already running on port $PORT"
+    echo "  http://localhost:$PORT"
+    exit 0
+fi
+
+echo "Starting HAL9000 log viewer on port $PORT..."
+echo "  http://localhost:$PORT"
+
+exec "$PY" "$PWD/logs-viewer/server.py"

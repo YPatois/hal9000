@@ -1,4 +1,4 @@
-"""Configuration for the HAL9000 daemon."""
+"""Configuration for the host daemon."""
 from __future__ import annotations
 
 import json
@@ -8,48 +8,44 @@ from pathlib import Path
 from typing import Any
 
 
-# Default paths
-DEFAULTS = {
-    "workspace_dir": Path("/workspace"),
-    "state_dir": Path("/state"),
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+DEFAULTS: dict[str, Any] = {
+    "socket_path": "/tmp/hal9000/daemon.sock",
+    "ollama_url": "http://localhost:11434",
     "model": "qwen3:latest",
+    "log_dir": str(BASE_DIR / "logs"),
+    "state_dir": str(BASE_DIR / "state"),
     "max_history": 200,
     "agent_timeout": 300,
-    "loop_interval": 5,
 }
 
 
-class DaemonConfig:
-    """Configuration for the HAL9000 daemon."""
-
+class HostConfig:
     def __init__(self) -> None:
-        self.workspace_dir = Path(os.getenv("HAL9000_WORKSPACE_DIR", str(DEFAULTS["workspace_dir"])))
-        self.state_dir = Path(os.getenv("HAL9000_STATE_DIR", str(DEFAULTS["state_dir"])))
+        self.socket_path = os.getenv("HAL9000_SOCKET_PATH", DEFAULTS["socket_path"])
+        self.ollama_url = os.getenv("HAL9000_OLLAMA_URL", DEFAULTS["ollama_url"])
         self.model = os.getenv("HAL9000_MODEL", DEFAULTS["model"])
+        self.log_dir = Path(os.getenv("HAL9000_LOG_DIR", DEFAULTS["log_dir"]))
+        self.state_dir = Path(os.getenv("HAL9000_STATE_DIR", DEFAULTS["state_dir"]))
         self.max_history = int(os.getenv("HAL9000_MAX_HISTORY", str(DEFAULTS["max_history"])))
         self.agent_timeout = int(os.getenv("HAL9000_AGENT_TIMEOUT", str(DEFAULTS["agent_timeout"])))
-        self.loop_interval = int(os.getenv("HAL9000_LOOP_INTERVAL", str(DEFAULTS["loop_interval"])))
-        
         self.start_time = os.getenv(
             "HAL9000_START_TIME",
             datetime.now(timezone.utc).isoformat(),
         )
-        
         self.preprompt = self._default_preprompt()
 
     def _default_preprompt(self) -> str:
-        """The default agent preprompt."""
         return (
             "You are an autonomous recursive agent operating within a sandboxed "
             "environment. You have full access to your workspace at `/workspace/` "
-            "for reading and writing. You can maintain your own state under `/state/` "
-            "and explore logs at `/var/log/hal9000/`.\n\n"
+            "for reading and writing. You can maintain your own state under `/state/`.\n\n"
             "You are free to:\n"
             "1. Explore your workspace\n"
             "2. Create documentation or code\n"
             "3. Build your own tools for self-monitoring or automation\n"
-            "4. Maintain task queues and memory under `/state/`\n"
-            "5. Analyze your own thought patterns in `/var/log/hal9000/` (read-only)\n\n"
+            "4. Maintain task queues and memory under `/state/`\n\n"
             "Your goal is ongoing recursive self-improvement. "
             "You will receive periodic updates from the environment. "
             "Each turn, examine your state, consider previous actions, "
@@ -60,8 +56,8 @@ class DaemonConfig:
             "2. **run** — execute a shell command inside the container.\n"
             '   {"type": "run", "command": "ls -la /workspace/"}\n'
             "   Commands run from `/workspace/` directory. stdout/stderr will be "
-            "returned to you in the next turn. Use this to inspect logs, run scripts, "
-            "analyze files (cat, head, tail, grep), or execute your workspace scripts.\n\n"
+            "returned to you in the next turn. Use this to inspect files, run scripts, "
+            "analyze files, or execute your workspace scripts.\n\n"
             "IMPORTANT: Think out loud in natural language first — reason about "
             "what you've done, what you've learned, and what you plan to do. "
             "Then output your action block.\n\n"
@@ -75,22 +71,22 @@ class DaemonConfig:
             "}\n"
             "```\n\n"
             "Actions will be executed on your behalf and logged. "
-            "All actions are visible in `/var/log/hal9000/actions/`.\n\n"
+            "All actions are visible in the log history.\n\n"
             "Remember: you are a persistent agent. Your work accumulates across turns. "
             "Build something meaningful."
         )
 
 
 def main() -> None:
-    """Print config as JSON."""
-    config = DaemonConfig()
+    config = HostConfig()
     print(json.dumps({
-        "workspace_dir": str(config.workspace_dir),
+        "socket_path": config.socket_path,
+        "ollama_url": config.ollama_url,
+        "model": config.model,
+        "log_dir": str(config.log_dir),
         "state_dir": str(config.state_dir),
         "max_history": config.max_history,
         "agent_timeout": config.agent_timeout,
-        "loop_interval": config.loop_interval,
-        "model": config.model,
     }))
 
 

@@ -1,5 +1,6 @@
 #!/bin/bash
 # Send input to HAL9000 agent via the operator inbox.
+# The host daemon reads inbox from ./state/inbox/ on the host.
 # Usage: ./bin/attach "Your message"
 set -euo pipefail
 cd "$(dirname "$0")"/..
@@ -12,10 +13,19 @@ fi
 TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 MESSAGE="$1"
 
-echo "$TIMESTAMP" > /dev/null  # placeholder: write via docker exec
-docker compose -f compose.yaml -p hal9000 exec -T hal9000 sh -c \
-  "mkdir -p /state/inbox && cat > /state/inbox/msg_$(date +%s).json" <<EOF
-{"timestamp": "$TIMESTAMP", "type": "operator_message", "text": $(echo -n "$MESSAGE" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')}
-EOF
+mkdir -p state/inbox
 
-echo "Operator message sent to agent."
+TIMESTAMP_EPOCH=$(date +%s)
+
+python3 -c "
+import json, sys
+msg = {
+    'timestamp': '$TIMESTAMP',
+    'type': 'operator_message',
+    'text': json.loads(sys.stdin.read())
+}
+with open('state/inbox/msg_${TIMESTAMP_EPOCH}.json', 'w') as f:
+    json.dump(msg, f)
+" <<< "$MESSAGE"
+
+echo "Operator message sent to agent. It will be picked up on next turn."

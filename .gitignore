@@ -5,3 +5,5 @@ logs/*
 state/*
 !state/.gitkeep
 .venv/
+.venv-host/
+workspace/

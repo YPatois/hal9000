@@ -2,12 +2,51 @@
 set -euo pipefail
 cd "$(dirname "$0")"/..
 
-for d in logs thoughts actions updates workspace state; do
+for d in logs thoughts actions updates workspace state state/inbox; do
     mkdir -p "$d"
 done
 
-echo "Starting HAL9000..."
+mkdir -p /tmp/hal9000
+
+# Find Python and set up venv for the host daemon
+PYTHON=""
+for cmd in python3 python; do
+    if command -v "$cmd" &>/dev/null; then
+        PYTHON="$cmd"
+        break
+    fi
+done
+if [ -z "$PYTHON" ]; then
+    echo "ERROR: No Python interpreter found (tried python3, python)" >&2
+    exit 1
+fi
+
+HOST_VENV=".venv-host"
+if [ ! -d "$HOST_VENV" ]; then
+    echo "Creating host venv..."
+    "$PYTHON" -m venv "$HOST_VENV"
+fi
+"$HOST_VENV/bin/pip" install -q httpx
+
+echo "Starting HAL9000 host daemon..."
+HOST_PYTHON="$HOST_VENV/bin/python"
+nohup "$HOST_PYTHON" -m host.daemon > /dev/null 2>&1 &
+HOST_PID=$!
+echo "$HOST_PID" > state/host.pid
+echo "  Host daemon PID: $HOST_PID"
+
+sleep 1
+
+if ! kill -0 "$HOST_PID" 2>/dev/null; then
+    echo "ERROR: Host daemon failed to start" >&2
+    exit 1
+fi
+
+echo "Starting container..."
 docker compose -f compose.yaml -p hal9000 build && docker compose -f compose.yaml -p hal9000 up -d
-echo "Agent started."
-echo "  View live logs: docker compose -f compose.yaml -p hal9000 logs -f hal9000"
-echo "  Capture to host: ./bin/capture-logs"
+
+echo ""
+echo "HAL9000 started."
+echo "  Host daemon PID: $HOST_PID (stop with: kill $HOST_PID)"
+echo "  View agent logs: docker compose -f compose.yaml -p hal9000 logs -f hal9000"
+echo "  View daemon logs: tail -f logs/thoughts/$(date +%F).log"

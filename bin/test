@@ -9,7 +9,7 @@ if [ ! -d "$VENV" ]; then
 fi
 
 echo "Installing dependencies..."
-"$VENV/bin/pip" install -q aiohttp httpx
+"$VENV/bin/pip" install -q httpx
 
 echo
 echo "=== Testing imports ==="
@@ -20,7 +20,11 @@ from daemon.log_record import LogRecord
 from daemon.context_builder import ContextBuilder
 from daemon.action_executor import ActionExecutor
 from daemon.action_processor import ActionExtractor
-print('All imports OK')
+print('daemon/ imports OK')
+from host.config import HostConfig
+from host.logger import FileLogger
+from host.ollama_client import OllamaClient
+print('host/ imports OK')
 PYEOF
 
 echo
@@ -46,6 +50,15 @@ assert not r3['success'] and 'Blocked' in r3['error']
 r4 = e.execute({'type': 'invalid', 'path': '/workspace/x'})
 assert not r4['success'] and 'Unknown' in r4['error']
 
+r5 = e.execute({'type': 'run', 'command': 'echo hello world'})
+assert r5['success'] and r5['stdout'].strip() == 'hello world'
+
+r6 = e.execute({'type': 'run', 'command': 'false'})
+assert r6['returncode'] == 1 and not r6['success']
+
+r7 = e.execute({'type': 'run', 'command': ''})
+assert r7['success'] and r7['returncode'] == 0
+
 os.system('rm -rf ' + tmpdir)
 print('Action executor OK')
 PYEOF
@@ -56,7 +69,6 @@ echo "=== Testing log record ==="
 import sys; sys.path.insert(0, '.')
 from daemon.log_record import LogRecord
 
-# no file I/O — purely in-memory ring buffer
 l = LogRecord(max_history=50)
 
 l.write_entry('thoughts', {'type': 'test', 'text': 'hello'})
@@ -67,11 +79,9 @@ assert len(recent) == 2
 assert recent[0]['text'] == 'hello'
 assert recent[-1]['text'] == 'world'
 
-# default when no matching categories
 empty = l.recent_entries(10, ['actions'])
 assert len(empty) == 0
 
-# category is automatically added
 assert recent[0]['category'] == 'thoughts'
 
 print('Log record OK')
@@ -109,6 +119,87 @@ assert actions[0]['type'] == 'write'
 text2, actions2 = e.parse_response('No action here')
 assert len(actions2) == 0
 print('Action processor OK')
+PYEOF
+
+echo
+echo "=== Testing host daemon socket ==="
+"$VENV/bin/python" << 'PYEOF'
+import sys; sys.path.insert(0, '.')
+import json, socket, threading, time, tempfile, os
+from pathlib import Path
+from host.config import HostConfig
+from host.daemon import HostDaemon
+
+tmpdir = Path(tempfile.mkdtemp())
+sock_path = str(tmpdir / "test.sock")
+log_dir = tmpdir / "logs"
+state_dir = tmpdir / "state"
+
+# Override config
+config = HostConfig()
+config.socket_path = sock_path
+config.log_dir = log_dir
+config.state_dir = state_dir
+config.model = "test-model"
+config.max_history = 50
+config.preprompt = "You are a test agent."
+
+# Start daemon in background thread
+daemon = HostDaemon(config)
+t = threading.Thread(target=daemon.run, daemon=True)
+t.start()
+time.sleep(0.5)
+
+# Connect client
+client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+client.connect(sock_path)
+
+def send(msg):
+    client.sendall((json.dumps(msg) + "\n").encode())
+    buf = b""
+    while True:
+        data = client.recv(65536)
+        if not data:
+            raise ConnectionError("closed")
+        buf += data
+        if b"\n" in buf:
+            line, _ = buf.split(b"\n", 1)
+            return json.loads(line)
+
+# Test ping
+resp = send({"type": "ping"})
+assert resp == {"pong": True}, f"ping failed: {resp}"
+
+# Test get_context
+resp = send({"type": "get_context"})
+assert "preprompt" in resp
+assert resp["preprompt"] == "You are a test agent."
+assert "logs" in resp
+assert "operator_messages" in resp
+print("  get_context OK")
+
+# Test log
+resp = send({"type": "log", "category": "thoughts", "data": {"type": "test", "text": "hello"}})
+assert resp == {"ok": True}
+# Verify it was written to file
+thought_files = list(log_dir.glob("thoughts/*.log"))
+assert len(thought_files) == 1, f"Expected 1 log file, got {thought_files}"
+content = thought_files[0].read_text()
+assert "hello" in content
+print("  log OK")
+
+# Test think (will fail because no Ollama, but should return error gracefully)
+resp = send({"type": "think", "context": "test context"})
+assert "error" in resp or "response" in resp
+print(f"  think result (expected error/no Ollama): {resp}")
+
+client.close()
+daemon.shutdown()
+t.join(timeout=3)
+
+import shutil
+shutil.rmtree(tmpdir, ignore_errors=True)
+print("Host daemon socket OK")
 PYEOF
 
 echo

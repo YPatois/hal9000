@@ -3,13 +3,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    network_mode: host
     volumes:
-      - ./logs:/var/log/hal9000:ro
+      - /tmp/hal9000:/tmp/hal9000
       - ./workspace:/workspace
       - ./state:/state
     environment:
       - PYTHONUNBUFFERED=1
+      - HAL9000_SOCKET_PATH=/tmp/hal9000/daemon.sock
       - HAL9000_MODEL
       - HAL9000_MAX_HISTORY
       - HAL9000_LOOP_INTERVAL

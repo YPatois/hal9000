@@ -1,5 +1,20 @@
 #!/bin/bash
+set -euo pipefail
 cd "$(dirname "$0")"/..
-echo "Stopping HAL9000..."
+
+echo "Stopping container..."
 docker compose -f compose.yaml -p hal9000 down
-echo "Agent stopped."
+
+echo "Stopping host daemon..."
+if [ -f state/host.pid ]; then
+    HOST_PID=$(cat state/host.pid)
+    if kill -0 "$HOST_PID" 2>/dev/null; then
+        kill "$HOST_PID" 2>/dev/null || true
+        echo "  Host daemon (PID $HOST_PID) stopped."
+    else
+        echo "  Host daemon not running."
+    fi
+    rm -f state/host.pid
+fi
+
+echo "HAL9000 stopped."

@@ -1,9 +1,9 @@
 FROM python:3.12-slim
 
-RUN pip install --no-cache-dir aiohttp httpx
+RUN apt-get update && apt-get install -y --no-install-recommends bash && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY . /app
 
-CMD ["python", "-m", "daemon.entry"]
+CMD ["python", "-m", "agent.processor"]

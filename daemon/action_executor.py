@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+
+MAX_OUTPUT_CHARS = 5000
 
 
 class ActionExecutor:
@@ -23,8 +26,12 @@ class ActionExecutor:
         try:
             if action_type == "write":
                 result = self._write(action)
+            elif action_type == "run":
+                result = self._run(action)
             else:
                 result = {"error": f"Unknown action type: {action_type}"}
+        except subprocess.TimeoutExpired:
+            result = {"error": "Command timed out", "stdout": "", "stderr": ""}
         except Exception as e:
             result["error"] = str(e)
 
@@ -51,6 +58,39 @@ class ActionExecutor:
         full_path.parent.mkdir(parents=True, exist_ok=True)
         full_path.write_text(content)
         return {"path": str(full_path), "bytes_written": len(content)}
+
+    def _run(self, action: dict[str, Any]) -> dict[str, Any]:
+        command = action.get("command", "")
+        timeout = action.get("timeout", 30)
+
+        if not command or not command.strip():
+            return {"stdout": "", "stderr": "", "returncode": 0}
+
+        result = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=self.workspace_dir,
+        )
+
+        stdout = result.stdout[:MAX_OUTPUT_CHARS] if result.stdout else ""
+        stderr = result.stderr[:MAX_OUTPUT_CHARS] if result.stderr else ""
+
+        if result.returncode != 0:
+            return {
+                "stdout": stdout,
+                "stderr": stderr,
+                "returncode": result.returncode,
+                "error": f"Command failed with exit code {result.returncode}",
+            }
+
+        return {
+            "stdout": stdout,
+            "stderr": stderr,
+            "returncode": result.returncode,
+        }
 
 
 def main() -> None:

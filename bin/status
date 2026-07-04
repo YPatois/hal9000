@@ -1,7 +1,33 @@
 #!/bin/bash
 cd "$(dirname "$0")"/..
-echo "HAL9000 Agent Status:"
-echo "====================="
-docker compose -f compose.yaml -p hal9000 ps
+
+echo "HAL9000 Status:"
+echo "==============="
+
 echo ""
-docker compose -f compose.yaml -p hal9000 logs --tail=15 hal9000
+echo "Host Daemon:"
+if [ -f state/host.pid ]; then
+    HOST_PID=$(cat state/host.pid)
+    if kill -0 "$HOST_PID" 2>/dev/null; then
+        echo "  Running (PID $HOST_PID)"
+    else
+        echo "  PID file exists but process not running (stale PID $HOST_PID)"
+    fi
+else
+    echo "  Not running"
+fi
+
+echo ""
+echo "Container:"
+docker compose -f compose.yaml -p hal9000 ps 2>/dev/null || echo "  Not found"
+
+echo ""
+if [ -f state/state.json ]; then
+    echo "Last turn:"
+    python3 -c "
+import json
+s = json.load(open('state/state.json'))
+print(f'  Turn: {s.get(\"turn\", \"?\")}')
+print(f'  Updated: {s.get(\"last_updated\", \"?\")}')
+"
+fi

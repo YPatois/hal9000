@@ -126,26 +126,28 @@ class LoopDaemon:
                 "model": self.config.model,
             }
             action["meta"] = meta
-            self.log.write_entry("actions", {
+            log_detail = {
                 "type": "action_log",
                 "turn": self.turn + 1,
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "action": action.get("type", "unknown"),
                 "path": action.get("path", ""),
-                "url": action.get("url", ""),
+                "command": action.get("command", ""),
                 "pre_execution": True,
-            })
+            }
+            self.log.write_entry("actions", log_detail)
             result = self.actions.execute_sync(action)
-            self.log.write_entry("actions", {
+            result_detail = {
                 "type": "action_result",
                 "turn": self.turn + 1,
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "action": action.get("type", "unknown"),
                 "path": action.get("path", ""),
-                "url": action.get("url", ""),
+                "command": action.get("command", ""),
                 "result": result,
                 "post_execution": True,
-            })
+            }
+            self.log.write_entry("actions", result_detail)
         
         return actions
 

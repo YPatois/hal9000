@@ -19,10 +19,11 @@ TIMESTAMP_EPOCH=$(date +%s)
 
 python3 -c "
 import json, sys
+text = sys.stdin.read()
 msg = {
     'timestamp': '$TIMESTAMP',
     'type': 'operator_message',
-    'text': json.loads(sys.stdin.read())
+    'text': text
 }
 with open('state/inbox/msg_${TIMESTAMP_EPOCH}.json', 'w') as f:
     json.dump(msg, f)

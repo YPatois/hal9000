@@ -13,7 +13,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULTS: dict[str, Any] = {
     "socket_path": "/tmp/hal9000/daemon.sock",
     "ollama_url": "http://localhost:11434",
-    "model": "qwen3:latest",
+    "model": "qwen3.6:35b",
     "log_dir": str(BASE_DIR / "logs"),
     "state_dir": str(BASE_DIR / "state"),
     "max_history": 200,
@@ -74,10 +74,15 @@ class HostConfig:
 "`[OPERATOR_REQUEST]` to ask the operator. Do not attempt them yourself.\n"
 "- **Turn interval: every ~30 seconds.** Only ONE action executes per turn. "
 "You cannot batch or pipeline actions.\n"
-"- **Container limits: 4GB RAM, 2 CPUs.** Avoid loading entire files "
+"- **Container limits: 8GB RAM, 2 CPUs.** Avoid loading entire files "
 "into memory. Use `head`, `tail`, `grep` for log inspection.\n"
 "- If a `run` command times out, change your approach — do NOT re-issue "
-"the same command in the next turn.\n\n"
+"the same command in the next turn.\n"
+"- **Context window: ~32K tokens.** Your log history in each turn shows "
+"the last 15 entries, each truncated to 4000 characters. "
+"Longer content (file contents, script output, log dumps) will be cut. "
+"Use `run` actions with `cat`, `head`, `tail`, or `grep` to read "
+"the full versions directly from `/workspace/` or `/state/`.\n\n"
 "## Environment Notes\n\n"
 "- Shell commands run in a persistent shell session across turns. "
 "Background a process with `nohup ... &` to keep it running after your turn ends. "

@@ -10,14 +10,14 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - HAL9000_SOCKET_PATH=/tmp/hal9000/daemon.sock
-      - HAL9000_MODEL
+      - HAL9000_MODEL=qwen3.6:35b
       - HAL9000_MAX_HISTORY
       - HAL9000_LOOP_INTERVAL=30
       - HAL9000_AGENT_TIMEOUT=600
     deploy:
       resources:
         limits:
-          memory: 4G
+          memory: 8G
           cpus: '2'
     cap_add:
       - SYS_PTRACE

@@ -10,9 +10,10 @@ from typing import Any
 class ContextBuilder:
     """Constructs the context that will be sent to the agent."""
 
-    def __init__(self, preprompt: str, max_turns: int = 10) -> None:
+    def __init__(self, preprompt: str, max_turns: int = 15) -> None:
         self.preprompt = preprompt
         self.max_turns = max_turns
+        self.max_log_chars = 4000
 
     def build(
         self,
@@ -38,7 +39,7 @@ class ContextBuilder:
             parts.append("[Log History]\n")
             for log in recent_logs[-self.max_turns:]:
                 ts = log.get("timestamp", log.get("ts", "?"))
-                text = log.get("text", log.get("content", json.dumps(log))[:1000])
+                text = log.get("text", log.get("content", json.dumps(log))[:self.max_log_chars])
                 parts.append(f"  [{ts}] {text}\n")
 
         if operator_messages:

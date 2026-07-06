@@ -12,7 +12,7 @@ from typing import Any
 DEFAULTS = {
     "workspace_dir": Path("/workspace"),
     "state_dir": Path("/state"),
-    "model": "qwen3:latest",
+    "model": "qwen3.6:35b",
     "max_history": 200,
     "agent_timeout": 600,
     "loop_interval": 30,

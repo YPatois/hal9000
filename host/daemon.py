@@ -107,7 +107,11 @@ class HostDaemon:
             "system_context": {
                 "shell_timeout": "~120 seconds per `run` command",
                 "turn_interval": "~30 seconds between turns",
-                "container": "4GB RAM, 2 CPUs",
+                "container": "8GB RAM, 2 CPUs",
+                "context_window": "~32K tokens",
+                "log_history_turns": "15 turns shown per context",
+                "log_entry_max_chars": "4000 characters per entry (use run+cat for full content)",
+                "full_content": "read files with `run` actions - `cat`, `head`, `tail`, `grep`",
                 "turn": self._agent_state.get("turn", 0),
                 "last_action": self._agent_state.get("last_action_result", "none"),
             },

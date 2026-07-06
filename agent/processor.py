@@ -82,7 +82,7 @@ class AgentLoop:
         from daemon.action_processor import ActionExtractor
         from daemon.action_executor import ActionExecutor
 
-        self.context_builder = ContextBuilder("", max_turns=10)
+        self.context_builder = ContextBuilder("", max_turns=15)
         self.extractor = ActionExtractor()
         self.executor = ActionExecutor(WORKSPACE_DIR, STATE_DIR)
 
@@ -163,6 +163,7 @@ class AgentLoop:
                         "path": action.get("path", ""),
                         "command": action.get("command", ""),
                         "result": result,
+                        "post_execution": True,
                     })
 
             except (ConnectionError, OSError) as e:

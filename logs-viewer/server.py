@@ -8,7 +8,9 @@ import json
 import os
 import socket
 import sys
+import time
 import urllib.parse
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -136,6 +138,36 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
                 self._send_file(PROJECT_ROOT / "logs-viewer" / path.lstrip("/"))
         except Exception as e:
             self._error(str(e))
+
+    def do_POST(self) -> None:
+        path = self.path.split("?")[0]
+        try:
+            if path == "/api/attach":
+                self._handle_attach()
+            else:
+                self._send_json({"error": "Not found"}, 404)
+        except Exception as e:
+            self._error(str(e))
+
+    def _handle_attach(self) -> None:
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode("utf-8") if length else ""
+        data = json.loads(body) if body else {}
+        text = data.get("text", "").strip()
+        if not text:
+            self._send_json({"error": "Missing text"}, 400)
+            return
+        inbox = STATE_DIR / "inbox"
+        inbox.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc)
+        msg = {
+            "timestamp": ts.isoformat(),
+            "type": "operator_message",
+            "text": text,
+        }
+        path = inbox / f"msg_{int(time.time())}.json"
+        path.write_text(json.dumps(msg))
+        self._send_json({"ok": True, "path": str(path)})
 
     def _parse_query(self) -> dict[str, str]:
         query: dict[str, str] = {}

@@ -173,6 +173,7 @@ select, input, textarea { background: var(--bg2); color: var(--fg); border: 1px 
 }
 .action-entry.success { border-left-color: var(--green); }
 .action-entry.fail { border-left-color: var(--red); }
+.action-entry.pending { border-left-color: var(--fg2); opacity: 0.65; }
 .action-entry .action-header {
   display: flex; align-items: center; gap: 8px;
   cursor: pointer; user-select: none;
@@ -185,6 +186,7 @@ select, input, textarea { background: var(--bg2); color: var(--fg); border: 1px 
   font-family: var(--mono); font-size: 12px; color: var(--fg2);
   flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.action-entry .action-header .action-ts { margin-left: auto; color: var(--fg2); font-size: 11px; font-family: var(--mono); }
 .action-entry .action-header .action-status {
   font-size: 14px;
 }
@@ -434,6 +436,23 @@ function highlightOpRequests(text) {
   return text;
 }
 
+document.addEventListener('DOMContentLoaded', function() {
+  document.getElementById('turn-container').addEventListener('click', function(e) {
+    const toggle = e.target.closest('.thinking-toggle');
+    if (!toggle) return;
+    const turn = toggle.dataset.turn;
+    const type = toggle.dataset.type || 'thinking';
+    if (!turn) return;
+    const block = document.getElementById(type + '-' + turn);
+    if (!block) return;
+    const textEl = block.querySelector('.' + type + '-text');
+    if (!textEl) return;
+    const isHidden = textEl.style.display === 'none';
+    textEl.style.display = isHidden ? '' : 'none';
+    toggle.textContent = isHidden ? '[hide]' : '[show]';
+  });
+});
+
 // ── Build turn cards ──
 function buildTurns(thoughts, actions, searchTerm) {
   if (!thoughts.length && !actions.length) {
@@ -482,8 +501,8 @@ function buildTurnCard(turn, entries) {
 
   // Prose text (text without thinking/reflection tags)
   let prose = thought ? (thought.text || '') : '';
-  // Remove <thinking> and <reflection> tags for display
-  const cleanProse = prose.replace(/<\/?thinking>|<\/?reflection>/g, '').trim();
+  // Remove <thinking> and <reflection> blocks entirely (content shown separately)
+  const cleanProse = prose.replace(/<thinking>[\s\S]*?<\/thinking>/g, '').replace(/<reflection>[\s\S]*?<\/reflection>/g, '').trim();
   // Also remove action blocks from prose (they're shown separately)
   const proseOnly = cleanProse.replace(/```action[\s\S]*?```/g, '').trim();
 
@@ -506,7 +525,7 @@ function buildTurnCard(turn, entries) {
   // Thinking section
   if (hasThinking) {
     html += `<div class="thinking-block" id="thinking-${turn}">`;
-    html += `<div class="thinking-label">Thinking <span class="thinking-toggle" onclick="event.stopPropagation();toggleThinking(${turn})">[hide]</span></div>`;
+    html += `<div class="thinking-label">Thinking <span class="thinking-toggle" data-turn="${turn}">[hide]</span></div>`;
     html += `<div class="thinking-text">${highlightOpRequests(escHtml(thought.thinking))}</div>`;
     html += `</div>`;
   }
@@ -514,7 +533,7 @@ function buildTurnCard(turn, entries) {
   // Reflection section
   if (hasReflection) {
     html += `<div class="reflection-block" id="reflection-${turn}">`;
-    html += `<div class="reflection-label">Reflection <span class="thinking-toggle" onclick="event.stopPropagation();toggleReflection(${turn})">[hide]</span></div>`;
+    html += `<div class="reflection-label">Reflection <span class="thinking-toggle" data-turn="${turn}" data-type="reflection">[hide]</span></div>`;
     html += `<div class="reflection-text">${escHtml(thought.reflection)}</div>`;
     html += `</div>`;
   }
@@ -534,6 +553,7 @@ function buildTurnCard(turn, entries) {
     const resultClass = success === true ? 'success' : success === false ? 'fail' : '';
     const path = a.path || a.command || '';
     const truncatedPath = path.length > 80 ? path.slice(0, 80) + '…' : path;
+    const actionTs = (a.timestamp || a.ts || '').slice(0, 19).replace('T', ' ');
 
     if (isResult) {
       html += `<div class="action-entry ${resultClass}">`;
@@ -541,6 +561,7 @@ function buildTurnCard(turn, entries) {
       html += `<span class="action-icon">⚡</span>`;
       html += `<span class="action-type">${escHtml(actionType)}</span>`;
       html += `<span class="action-detail">${escHtml(truncatedPath)}</span>`;
+      if (actionTs) html += `<span class="action-ts">${escHtml(actionTs)}</span>`;
       if (statusIcon) html += `<span class="action-status">${statusIcon}</span>`;
       html += `</div>`;
       html += `<div class="action-body">`;
@@ -556,6 +577,15 @@ function buildTurnCard(turn, entries) {
         }
       }
       html += `</div></div>`;
+    } else if (isPre) {
+      html += `<div class="action-entry pending">`;
+      html += `<div class="action-header">`;
+      html += `<span class="action-icon">⚡</span>`;
+      html += `<span class="action-type">${escHtml(actionType)}</span>`;
+      html += `<span class="action-detail">${escHtml(truncatedPath)}</span>`;
+      if (actionTs) html += `<span class="action-ts">${escHtml(actionTs)}</span>`;
+      html += `<span class="action-status" title="Dispatched">↗</span>`;
+      html += `</div></div>`;
     }
   }
 
@@ -563,21 +593,7 @@ function buildTurnCard(turn, entries) {
   return html;
 }
 
-function toggleThinking(turn) {
-  const block = document.getElementById(`thinking-${turn}`);
-  if (!block) return;
-  block.classList.toggle('collapsed');
-  const toggle = block.querySelector('.thinking-toggle');
-  toggle.textContent = block.classList.contains('collapsed') ? '[show]' : '[hide]';
-}
 
-function toggleReflection(turn) {
-  const block = document.getElementById(`reflection-${turn}`);
-  if (!block) return;
-  block.classList.toggle('collapsed');
-  const toggle = block.querySelector('.thinking-toggle');
-  toggle.textContent = block.classList.contains('collapsed') ? '[show]' : '[hide]';
-}
 
 // ── Search ──
 let searchTimeout;
@@ -619,17 +635,7 @@ function render() {
   document.getElementById('stats-bar').textContent =
     `Turns: ${totalTurns} | Actions: ${totalActions} (✓${successActions} ✗${failActions})`;
 
-  // Collapse all thinking blocks by default
-  STATE.thoughts.forEach(t => {
-    if (t.thinking) {
-      const block = document.getElementById(`thinking-${t.turn}`);
-      if (block && !block.classList.contains('collapsed')) {
-        block.classList.add('collapsed');
-        const toggle = block.querySelector('.thinking-toggle');
-        if (toggle) toggle.textContent = '[show]';
-      }
-    }
-  });
+  // All thinking/reflection blocks start visible (inline style controls hide/show)
 }
 
 // ── Auto-refresh —─

@@ -14,8 +14,8 @@ DEFAULTS = {
     "state_dir": Path("/state"),
     "model": "qwen3:latest",
     "max_history": 200,
-    "agent_timeout": 300,
-    "loop_interval": 5,
+    "agent_timeout": 600,
+    "loop_interval": 30,
 }
 
 

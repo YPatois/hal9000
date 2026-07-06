@@ -10,6 +10,7 @@ import re
 import signal
 import socket
 import sys
+import threading
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -85,12 +86,31 @@ class HostDaemon:
 
     def _handle_get_context(self) -> dict[str, Any]:
         operator_msgs = self._read_operator_messages()
+        turn = self._agent_state.get("turn", 0)
+        for msg in operator_msgs:
+            ts = datetime.now(timezone.utc).isoformat()
+            entry: dict[str, Any] = {
+                "type": "operator_input",
+                "text": msg.get("text", ""),
+                "turn": turn,
+                "model": self.config.model,
+                "timestamp": ts,
+            }
+            self.logger.write("thoughts", entry)
+            self.logger.write("updates", entry)
         logs = list(self._ring)
         return {
             "preprompt": self.config.preprompt,
             "logs": logs,
             "operator_messages": operator_msgs,
             "agent_state": self._agent_state,
+            "system_context": {
+                "shell_timeout": "~120 seconds per `run` command",
+                "turn_interval": "~30 seconds between turns",
+                "container": "4GB RAM, 2 CPUs",
+                "turn": self._agent_state.get("turn", 0),
+                "last_action": self._agent_state.get("last_action_result", "none"),
+            },
         }
 
     def _handle_think(self, context: str) -> dict[str, Any]:
@@ -122,7 +142,10 @@ class HostDaemon:
         self.logger.write(category, data)
         self._ring.append(data)
 
-        if msg.get("action_type") == "state_update":
+        if data.get("type") == "action_result":
+            result = data.get("result", {})
+            self._agent_state["last_action_result"] = "success" if result.get("success") else "error"
+        elif msg.get("action_type") == "state_update":
             self._agent_state.update(data.get("state", {}))
             self._save_state()
         return {"ok": True}
@@ -162,34 +185,40 @@ class HostDaemon:
         while self.running:
             try:
                 conn, _ = server.accept()
+                t = threading.Thread(
+                    target=self._serve_connection, args=(conn,), daemon=True
+                )
+                t.start()
             except OSError:
                 break
-            with conn:
-                buffer = b""
-                while self.running:
-                    try:
-                        data = conn.recv(65536)
-                        if not data:
-                            break
-                        buffer += data
-                        while b"\n" in buffer:
-                            line, buffer = buffer.split(b"\n", 1)
-                            line = line.strip()
-                            if not line:
-                                continue
-                            try:
-                                msg = json.loads(line)
-                                response = self.handle_message(msg)
-                                conn.sendall((json.dumps(response) + "\n").encode())
-                            except json.JSONDecodeError:
-                                conn.sendall(
-                                    (json.dumps({"error": "invalid JSON"}) + "\n").encode()
-                                )
-                    except OSError:
-                        break
 
         server.close()
         self._cleanup()
+
+    def _serve_connection(self, conn: socket.socket) -> None:
+        with conn:
+            buffer = b""
+            while self.running:
+                try:
+                    data = conn.recv(65536)
+                    if not data:
+                        break
+                    buffer += data
+                    while b"\n" in buffer:
+                        line, buffer = buffer.split(b"\n", 1)
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            msg = json.loads(line)
+                            response = self.handle_message(msg)
+                            conn.sendall((json.dumps(response) + "\n").encode())
+                        except json.JSONDecodeError:
+                            conn.sendall(
+                                (json.dumps({"error": "invalid JSON"}) + "\n").encode()
+                            )
+                except OSError:
+                    break
 
     def _cleanup(self) -> None:
         self._save_state()

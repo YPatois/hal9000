@@ -8,6 +8,7 @@ import json
 import os
 import socket
 import sys
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -142,7 +143,7 @@ class LogViewerHandler(http.server.BaseHTTPRequestHandler):
             for part in self.path.split("?", 1)[1].split("&"):
                 if "=" in part:
                     k, v = part.split("=", 1)
-                    query[k] = v
+                    query[urllib.parse.unquote(k)] = urllib.parse.unquote(v)
         return query
 
     def _handle_logs(self, category: str, query: dict[str, str]) -> None:

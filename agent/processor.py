@@ -14,8 +14,8 @@ from pathlib import Path
 from typing import Any
 
 SOCKET_PATH = os.getenv("HAL9000_SOCKET_PATH", "/tmp/hal9000/daemon.sock")
-LOOP_INTERVAL = int(os.getenv("HAL9000_LOOP_INTERVAL", "5"))
-AGENT_TIMEOUT = int(os.getenv("HAL9000_AGENT_TIMEOUT", "300"))
+LOOP_INTERVAL = int(os.getenv("HAL9000_LOOP_INTERVAL", "30"))
+AGENT_TIMEOUT = int(os.getenv("HAL9000_AGENT_TIMEOUT", "600"))
 WORKSPACE_DIR = Path(os.getenv("HAL9000_WORKSPACE_DIR", "/workspace"))
 STATE_DIR = Path(os.getenv("HAL9000_STATE_DIR", "/state"))
 
@@ -92,7 +92,12 @@ class AgentLoop:
         logs = ctx.get("logs", [])
         operator_msgs = ctx.get("operator_messages", [])
         agent_state = ctx.get("agent_state", {})
-        return self.context_builder.build(agent_state, logs, operator_messages=operator_msgs)
+        system_context = ctx.get("system_context")
+        return self.context_builder.build(
+            agent_state, logs,
+            operator_messages=operator_msgs,
+            system_context=system_context,
+        )
 
     def _log_action(self, category: str, entry: dict[str, Any]) -> None:
         entry["model"] = ""

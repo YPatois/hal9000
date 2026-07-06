@@ -19,14 +19,16 @@ class ContextBuilder:
         agent_state: dict[str, Any],
         recent_logs: list[dict[str, Any]],
         operator_messages: list[dict[str, Any]] | None = None,
+        system_context: dict[str, Any] | None = None,
     ) -> str:
         """Build context string for the agent."""
         parts = [self.preprompt, "\n"]
 
-        if operator_messages:
-            parts.append("[Operator Messages]\n")
-            for msg in operator_messages:
-                parts.append(f"  [{msg.get('timestamp', '?')}] Operator: {msg.get('text', '')}\n")
+        if system_context:
+            parts.append("[System Context]")
+            for key, value in system_context.items():
+                label = key.replace("_", " ").title()
+                parts.append(f"  {label}: {value}")
             parts.append("\n")
 
         if agent_state.get("last_summary"):
@@ -38,6 +40,12 @@ class ContextBuilder:
                 ts = log.get("timestamp", log.get("ts", "?"))
                 text = log.get("text", log.get("content", json.dumps(log))[:1000])
                 parts.append(f"  [{ts}] {text}\n")
+
+        if operator_messages:
+            parts.append("\n>>> OPERATOR MESSAGES - These require an immediate response <<<\n")
+            for msg in operator_messages:
+                parts.append(f"  [{msg.get('timestamp', '?')}] Operator: {msg.get('text', '')}\n")
+            parts.append("\nYou MUST respond to the operator message ABOVE before continuing your own tasks.\n")
 
         parts.append(f"\n[Turn {datetime.now(timezone.utc).isoformat()}] Execute your next action or record a thought.\n")
 

@@ -197,6 +197,7 @@ def main() -> None:
 
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGCHLD, signal.SIG_IGN)
 
     loop.run()
 

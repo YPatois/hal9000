@@ -16,13 +16,15 @@ class ActionExtractor:
         Actions are extracted from code blocks with language 'action' or specific markers.
         <thinking> and <reflection> tags are stripped from the returned text.
         """
-        action_pattern = r"```action\s*\n([\s\S]*?)\n```"
+        action_pattern = r"(`{1,3})action\s*\n([\s\S]*?)\n\1"
         matches = re.findall(action_pattern, response)
 
         actions = []
         for match in matches:
+            # match is a tuple (backticks, content) due to two capture groups
+            content = match[1]
             try:
-                action = json.loads(match.strip())
+                action = json.loads(content.strip())
                 actions.append(action)
             except json.JSONDecodeError:
                 pass

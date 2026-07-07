@@ -28,6 +28,16 @@ if [ ! -d "$HOST_VENV" ]; then
 fi
 "$HOST_VENV/bin/pip" install -q httpx
 
+# Kill any existing daemon before starting a new one
+if [ -f state/host.pid ]; then
+    OLD_PID=$(cat state/host.pid)
+    kill "$OLD_PID" 2>/dev/null || true
+    sleep 0.5
+fi
+# Also kill any stale daemon processes from earlier sessions
+pkill -f "host\.daemon" 2>/dev/null || true
+sleep 0.5
+
 echo "Starting HAL9000 host daemon..."
 HOST_PYTHON="$HOST_VENV/bin/python"
 nohup "$HOST_PYTHON" -m host.daemon > /dev/null 2>&1 &

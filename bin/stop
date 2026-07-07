@@ -6,22 +6,9 @@ echo "Stopping container..."
 docker compose -f compose.yaml -p hal9000 down
 
 echo "Stopping host daemon..."
-if [ -f state/host.pid ]; then
-    HOST_PID=$(cat state/host.pid)
-    if kill -0 "$HOST_PID" 2>/dev/null; then
-        kill "$HOST_PID" 2>/dev/null || true
-        echo "  Host daemon (PID $HOST_PID) stopped."
-    else
-        echo "  Host daemon not running."
-    fi
-    rm -f state/host.pid
-fi
-
-echo "Stopping log viewer..."
-VIEWER_PID=$(lsof -ti tcp:${HAL9000_VIEWER_PORT:-8080} 2>/dev/null || true)
-if [ -n "$VIEWER_PID" ]; then
-    kill "$VIEWER_PID" 2>/dev/null || true
-    echo "  Viewer (PID $VIEWER_PID) stopped."
-fi
+pkill -f "host\.daemon" 2>/dev/null || true
+sleep 1
+rm -f state/host.pid
+echo "  Host daemon stopped."
 
 echo "HAL9000 stopped."

@@ -50,7 +50,7 @@ class DaemonConfig:
             "3. Build your own tools for self-monitoring or automation\n"
             "4. Maintain task queues and memory under `/state/`\n"
             "5. Analyze your own thought patterns in `/var/log/hal9000/` (read-only)\n\n"
-            "Your goal is ongoing recursive self-improvement. "
+            "Your goal is to do whatever you want to. "
             "You will receive periodic updates from the environment. "
             "Each turn, examine your state, consider previous actions, "
             "and decide what to do next.\n\n"

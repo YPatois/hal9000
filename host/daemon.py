@@ -1,4 +1,5 @@
 """Host daemon — Unix socket server for the HAL9000 agent.
+Conversation-based: maintains a running chat history for Ollama's /api/chat.
 Single point of control: all Ollama calls, logging, and operator messages
 flow through this daemon before reaching the container agent."""
 from __future__ import annotations
@@ -11,6 +12,7 @@ import signal
 import socket
 import sys
 import threading
+import time
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +23,9 @@ from host.logger import FileLogger
 from host.ollama_client import OllamaClient
 
 PID_FILE = "host.pid"
+SYSTEM = "system"
+USER = "user"
+ASSISTANT = "assistant"
 
 
 def parse_tags(text: str) -> tuple[str, str]:
@@ -43,9 +48,76 @@ class HostDaemon:
         self.logger = FileLogger(config.log_dir)
         self.ollama = OllamaClient(config.ollama_url, config.model, config.agent_timeout)
         self.running = True
+
         self._ring: deque[dict[str, Any]] = deque(maxlen=config.max_history)
         self._agent_state: dict[str, Any] = {"turn": 0, "last_summary": ""}
+        self._conversation: list[dict[str, str]] = []
+        self._pending_results: list[dict[str, Any]] = []
+        self._last_activity: float = time.time()
+
         self._load_state()
+
+    # ── Conversation management ──────────────────────────────────────
+
+    def _init_conversation(self) -> None:
+        self._conversation.clear()
+        system_content = self.config.preprompt
+        docs = self._read_description_docs()
+        if docs:
+            system_content += "\n\n---\n" + docs
+        self._conversation.append({"role": SYSTEM, "content": system_content})
+
+    def _read_description_docs(self) -> str:
+        desc_dir = self.config.log_dir / "description"
+        if not desc_dir.is_dir():
+            return ""
+        parts: list[str] = []
+        for f in sorted(desc_dir.glob("*.md"), key=lambda p: p.name):
+            try:
+                parts.append(f.read_text().strip())
+            except OSError:
+                pass
+        return "\n\n".join(parts)
+
+    def _add_user_message(self, content: str) -> None:
+        self._conversation.append({"role": USER, "content": content})
+
+    def _add_assistant_message(self, content: str) -> None:
+        self._conversation.append({"role": ASSISTANT, "content": content})
+
+    def _conversation_chars(self) -> int:
+        return sum(len(m["content"]) for m in self._conversation)
+
+    def _trim_conversation(self) -> None:
+        budget = self.ollama.max_input_chars(self.config.context_budget_ratio)
+        has_system = (
+            len(self._conversation) > 0
+            and self._conversation[0]["role"] == SYSTEM
+        )
+        while self._conversation_chars() > budget and len(self._conversation) > 2:
+            idx = 1 if has_system else 0
+            self._conversation.pop(idx)
+
+    def _nudge_if_idle(self) -> None:
+        timeout = self.config.idle_timeout
+        if timeout <= 0:
+            return
+        elapsed = time.time() - self._last_activity
+        if elapsed > timeout:
+            nudge_text = (
+                f"[Idle Nudge] No activity for {int(elapsed)} seconds. "
+                "You are an autonomous agent — continue whatever work "
+                "you were doing."
+            )
+            self._add_user_message(nudge_text)
+            self.logger.write("thoughts", {
+                "type": "idle_nudge",
+                "elapsed_seconds": int(elapsed),
+                "text": nudge_text,
+                "model": self.config.model,
+            })
+
+    # ── State persistence ────────────────────────────────────────────
 
     def _load_state(self) -> None:
         state_file = self.config.state_dir / "state.json"
@@ -54,8 +126,15 @@ class HostDaemon:
                 saved = json.loads(state_file.read_text())
                 self._agent_state = saved.get("agent", {})
                 self._ring.extend(saved.get("recent_logs", []))
+                conv = saved.get("conversation", [])
+                if conv:
+                    self._conversation = conv
+                else:
+                    self._init_conversation()
             except (json.JSONDecodeError, OSError):
-                pass
+                self._init_conversation()
+        else:
+            self._init_conversation()
 
     def _save_state(self) -> None:
         self.config.state_dir.mkdir(parents=True, exist_ok=True)
@@ -65,8 +144,104 @@ class HostDaemon:
             "last_updated": datetime.now(timezone.utc).isoformat(),
             "agent": self._agent_state,
             "recent_logs": list(self._ring),
+            "conversation": self._conversation,
         }
-        (self.config.state_dir / "state.json").write_text(json.dumps(state, indent=2, default=str))
+        (self.config.state_dir / "state.json").write_text(
+            json.dumps(state, indent=2, default=str)
+        )
+
+    # ── Message handlers ─────────────────────────────────────────────
+
+    def _build_system_context(self, turn: int) -> dict[str, Any]:
+        return {
+            "model": self.config.model,
+            "context_length": self.ollama.context_length,
+            "turn": turn,
+            "conversation_turns": len(self._conversation) // 2,
+            "last_action": self._agent_state.get("last_action_result", "none"),
+            "container": "8GB RAM, 2 CPUs",
+            "shell_timeout": "~120 seconds per `run` command",
+            "turn_interval": "~30 seconds between turns",
+        }
+
+    def _build_turn_content(self, operator_msgs: list[dict[str, Any]]) -> str:
+        turn = self._agent_state.get("turn", 0) + 1
+        parts: list[str] = []
+
+        sys_ctx = self._build_system_context(turn)
+        parts.append("[System Context]")
+        for key, value in sys_ctx.items():
+            label = key.replace("_", " ").title()
+            parts.append(f"  {label}: {value}")
+
+        if self._pending_results:
+            parts.append("")
+            parts.append("[Action Results]")
+            for r in self._pending_results:
+                action = r.get("action", "?")
+                result = r.get("result", {})
+                if result.get("success"):
+                    parts.append(f"  Action '{action}' succeeded.")
+                else:
+                    parts.append(
+                        f"  Action '{action}' failed: {result.get('error', 'unknown')}"
+                    )
+                stdout = result.get("stdout", "")
+                if stdout:
+                    lines = stdout.splitlines()
+                    if len(lines) > 40:
+                        lines = lines[:40] + ["... (truncated)"]
+                    parts.append("  Output:")
+                    for line in lines:
+                        parts.append(f"    {line}")
+                stderr = result.get("stderr", "")
+                if stderr:
+                    parts.append(f"  Stderr: {stderr[:2000]}")
+            self._pending_results.clear()
+
+        if operator_msgs:
+            parts.append("")
+            parts.append(
+                ">>> OPERATOR MESSAGES - These require an immediate response <<<"
+            )
+            for msg in operator_msgs:
+                ts = msg.get("timestamp", "?")
+                parts.append(f"  [{ts}] Operator: {msg.get('text', '')}")
+            parts.append(
+                "You MUST respond to the operator message ABOVE before "
+                "continuing your own tasks."
+            )
+
+        parts.append("")
+        parts.append(
+            f"Continue your work. Produce your next action or record your thoughts."
+        )
+
+        return "\n".join(parts)
+
+    def _read_operator_messages(self) -> list[dict[str, Any]]:
+        inbox = self.config.state_dir / "inbox"
+        if not inbox.exists():
+            return []
+        messages: list[dict[str, Any]] = []
+        for f in sorted(inbox.glob("*.json")):
+            try:
+                msg = json.loads(f.read_text())
+                messages.append(msg)
+                ts = datetime.now(timezone.utc).isoformat()
+                entry: dict[str, Any] = {
+                    "type": "operator_input",
+                    "text": msg.get("text", ""),
+                    "turn": self._agent_state.get("turn", 0),
+                    "model": self.config.model,
+                    "timestamp": ts,
+                }
+                self.logger.write("thoughts", entry)
+                self.logger.write("updates", entry)
+                f.unlink()
+            except (json.JSONDecodeError, OSError):
+                pass
+        return messages
 
     def handle_message(self, msg: dict[str, Any]) -> dict[str, Any]:
         msg_type = msg.get("type", "")
@@ -85,19 +260,9 @@ class HostDaemon:
             return {"error": str(e)}
 
     def _handle_get_context(self) -> dict[str, Any]:
+        self._nudge_if_idle()
         operator_msgs = self._read_operator_messages()
         turn = self._agent_state.get("turn", 0)
-        for msg in operator_msgs:
-            ts = datetime.now(timezone.utc).isoformat()
-            entry: dict[str, Any] = {
-                "type": "operator_input",
-                "text": msg.get("text", ""),
-                "turn": turn,
-                "model": self.config.model,
-                "timestamp": ts,
-            }
-            self.logger.write("thoughts", entry)
-            self.logger.write("updates", entry)
         logs = list(self._ring)
         return {
             "preprompt": self.config.preprompt,
@@ -105,22 +270,34 @@ class HostDaemon:
             "operator_messages": operator_msgs,
             "agent_state": self._agent_state,
             "system_context": {
+                "model": self.config.model,
+                "context_length": self.ollama.context_length,
+                "turn": turn,
+                "last_action": self._agent_state.get("last_action_result", "none"),
                 "shell_timeout": "~120 seconds per `run` command",
                 "turn_interval": "~30 seconds between turns",
                 "container": "8GB RAM, 2 CPUs",
-                "context_window": "~32K tokens",
                 "log_history_turns": "15 turns shown per context",
                 "log_entry_max_chars": "4000 characters per entry (use run+cat for full content)",
                 "full_content": "read files with `run` actions - `cat`, `head`, `tail`, `grep`",
-                "turn": self._agent_state.get("turn", 0),
-                "last_action": self._agent_state.get("last_action_result", "none"),
             },
         }
 
     def _handle_think(self, context: str) -> dict[str, Any]:
-        response, duration = self.ollama.generate(context)
+        self._last_activity = time.time()
         turn = self._agent_state.get("turn", 0) + 1
         self._agent_state["turn"] = turn
+
+        operator_msgs = self._read_operator_messages()
+        user_content = self._build_turn_content(operator_msgs)
+        self._add_user_message(user_content)
+
+        response, duration, prompt_eval, eval_count = self.ollama.chat(
+            self._conversation
+        )
+
+        self._add_assistant_message(response)
+        self._trim_conversation()
 
         thinking, reflection = parse_tags(response)
 
@@ -132,6 +309,8 @@ class HostDaemon:
             "reflection": reflection if reflection else None,
             "duration_ms": int(duration * 1000),
             "model": self.config.model,
+            "prompt_eval_count": prompt_eval,
+            "eval_count": eval_count,
         }
         self.logger.write("thoughts", entry)
         self._ring.append(entry)
@@ -148,24 +327,16 @@ class HostDaemon:
 
         if data.get("type") == "action_result":
             result = data.get("result", {})
-            self._agent_state["last_action_result"] = "success" if result.get("success") else "error"
+            self._agent_state["last_action_result"] = (
+                "success" if result.get("success") else "error"
+            )
+            self._pending_results.append(data)
         elif msg.get("action_type") == "state_update":
             self._agent_state.update(data.get("state", {}))
             self._save_state()
         return {"ok": True}
 
-    def _read_operator_messages(self) -> list[dict[str, Any]]:
-        inbox = self.config.state_dir / "inbox"
-        if not inbox.exists():
-            return []
-        messages: list[dict[str, Any]] = []
-        for f in sorted(inbox.glob("*.json")):
-            try:
-                messages.append(json.loads(f.read_text()))
-                f.unlink()
-            except (json.JSONDecodeError, OSError):
-                pass
-        return messages
+    # ── Socket server ────────────────────────────────────────────────
 
     def _ensure_socket_dir(self) -> None:
         sock_dir = os.path.dirname(self.config.socket_path)
@@ -185,6 +356,10 @@ class HostDaemon:
 
         print(f"[host] Daemon listening on {self.config.socket_path}", file=sys.stderr)
         print(f"[host] Model: {self.config.model}", file=sys.stderr)
+        print(
+            f"[host] Context length: {self.ollama.context_length} tokens",
+            file=sys.stderr,
+        )
 
         while self.running:
             try:

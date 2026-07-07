@@ -7,8 +7,38 @@ from pathlib import Path
 from typing import Any
 
 
+class DescriptionDocLoader:
+    """Loads markdown docs from a description directory.
+    Used by the host daemon to inject docs into the system message."""
+
+    def __init__(self, desc_dir: str | Path) -> None:
+        self.desc_dir = Path(desc_dir)
+
+    def load_all(self) -> str:
+        if not self.desc_dir.is_dir():
+            return ""
+        parts: list[str] = []
+        for f in sorted(self.desc_dir.glob("*.md"), key=lambda p: p.name):
+            try:
+                parts.append(f.read_text().strip())
+            except OSError:
+                pass
+        return "\n\n".join(parts)
+
+    def load(self, name: str) -> str:
+        path = self.desc_dir / name
+        if not path.name.endswith(".md"):
+            path = path.with_suffix(".md")
+        if path.is_file():
+            try:
+                return path.read_text().strip()
+            except OSError:
+                pass
+        return ""
+
+
 class ContextBuilder:
-    """Constructs the context that will be sent to the agent."""
+    """Constructs the context string sent to the agent."""
 
     def __init__(self, preprompt: str, max_turns: int = 15) -> None:
         self.preprompt = preprompt
@@ -22,7 +52,6 @@ class ContextBuilder:
         operator_messages: list[dict[str, Any]] | None = None,
         system_context: dict[str, Any] | None = None,
     ) -> str:
-        """Build context string for the agent."""
         parts = [self.preprompt, "\n"]
 
         if system_context:
@@ -43,11 +72,16 @@ class ContextBuilder:
                 parts.append(f"  [{ts}] {text}\n")
 
         if operator_messages:
-            parts.append("\n>>> OPERATOR MESSAGES - These require an immediate response <<<\n")
+            parts.append("\n>>> OPERATOR MESSAGES <<<\n")
             for msg in operator_messages:
                 parts.append(f"  [{msg.get('timestamp', '?')}] Operator: {msg.get('text', '')}\n")
-            parts.append("\nYou MUST respond to the operator message ABOVE before continuing your own tasks.\n")
+            parts.append(
+                "You MUST respond to the operator message ABOVE before continuing.\n"
+            )
 
-        parts.append(f"\n[Turn {datetime.now(timezone.utc).isoformat()}] Execute your next action or record a thought.\n")
+        parts.append(
+            f"\n[Turn {datetime.now(timezone.utc).isoformat()}] "
+            "Execute your next action or record a thought.\n"
+        )
 
         return "".join(parts)

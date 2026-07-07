@@ -3,10 +3,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
     volumes:
       - /tmp/hal9000:/tmp/hal9000
       - ./workspace:/workspace
       - ./state:/state
+      - ./logs/description:/host-logs/description:ro
     environment:
       - PYTHONUNBUFFERED=1
       - HAL9000_SOCKET_PATH=/tmp/hal9000/daemon.sock
@@ -19,6 +22,8 @@ services:
         limits:
           memory: 8G
           cpus: '2'
+    cap_drop:
+      - ALL
     cap_add:
       - SYS_PTRACE
     stop_signal: SIGTERM

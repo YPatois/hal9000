@@ -1,8 +1,9 @@
-"""Container-side agent loop. Connects to host daemon via Unix socket.
-All Ollama calls, logging, and operator messages flow through the daemon."""
+"""Container-side agent loop — thin relay.
+Connects to host daemon via Unix socket. All Ollama calls, logging, and
+operator messages flow through the daemon. This process only executes
+actions and reports results back to the host."""
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import signal
@@ -12,6 +13,9 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from daemon.action_processor import ActionExtractor
+from daemon.action_executor import ActionExecutor
 
 SOCKET_PATH = os.getenv("HAL9000_SOCKET_PATH", "/tmp/hal9000/daemon.sock")
 LOOP_INTERVAL = int(os.getenv("HAL9000_LOOP_INTERVAL", "30"))
@@ -59,17 +63,14 @@ class DaemonClient:
     def get_context(self) -> dict[str, Any]:
         return self.send({"type": "get_context"})
 
-    def think(self, context: str) -> str:
+    def think(self, context: str = "") -> str:
         result = self.send({"type": "think", "context": context})
         if "error" in result:
             raise RuntimeError(result["error"])
         return result["response"]
 
-    def log(self, category: str, data: dict[str, Any], action_type: str = "") -> None:
-        msg: dict[str, Any] = {"type": "log", "category": category, "data": data}
-        if action_type:
-            msg["action_type"] = action_type
-        self.send(msg)
+    def log(self, category: str, data: dict[str, Any]) -> None:
+        self.send({"type": "log", "category": category, "data": data})
 
 
 class AgentLoop:
@@ -77,31 +78,24 @@ class AgentLoop:
         self.client = DaemonClient(SOCKET_PATH)
         self.running = True
         self.turn = 0
-
-        from daemon.context_builder import ContextBuilder
-        from daemon.action_processor import ActionExtractor
-        from daemon.action_executor import ActionExecutor
-
-        self.context_builder = ContextBuilder("", max_turns=15)
-        self.extractor = ActionExtractor()
         self.executor = ActionExecutor(WORKSPACE_DIR, STATE_DIR)
+        self.extractor = ActionExtractor()
 
-    def _build_context(self, ctx: dict[str, Any]) -> str:
-        preprompt = ctx.get("preprompt", "")
-        self.context_builder.preprompt = preprompt
-        logs = ctx.get("logs", [])
-        operator_msgs = ctx.get("operator_messages", [])
-        agent_state = ctx.get("agent_state", {})
-        system_context = ctx.get("system_context")
-        return self.context_builder.build(
-            agent_state, logs,
-            operator_messages=operator_msgs,
-            system_context=system_context,
-        )
-
-    def _log_action(self, category: str, entry: dict[str, Any]) -> None:
-        entry["model"] = ""
-        self.client.log(category, entry)
+    def _log_action_result(
+        self,
+        action: dict[str, Any],
+        result: dict[str, Any],
+    ) -> None:
+        entry: dict[str, Any] = {
+            "type": "action_result",
+            "turn": self.turn,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "action": action.get("type", "unknown"),
+            "path": action.get("path", ""),
+            "command": action.get("command", ""),
+            "result": result,
+        }
+        self.client.log("actions", entry)
 
     def run(self) -> None:
         print(f"[agent] Connecting to daemon at {SOCKET_PATH}", file=sys.stderr)
@@ -113,27 +107,18 @@ class AgentLoop:
             turn_start = time.time()
 
             try:
-                ctx = self.client.get_context()
-                context = self._build_context(ctx)
-                prompt = f"SYSTEM TURN: {self.turn}\n\n{context}"
-
                 print(f"[agent] Turn {self.turn}...", file=sys.stderr)
 
                 try:
-                    response = self.client.think(prompt)
+                    response = self.client.think()
                 except RuntimeError as e:
                     print(f"[agent] Think error: {e}", file=sys.stderr)
-                    self._log_action("updates", {
-                        "type": "error",
-                        "turn": self.turn,
-                        "error": str(e),
-                    })
                     delay = max(1, LOOP_INTERVAL - (time.time() - turn_start))
                     if delay > 1:
                         time.sleep(delay)
                     continue
 
-                text, actions = self.extractor.parse_response(response)
+                _, actions = self.extractor.parse_response(response)
 
                 for action in actions:
                     action_meta = {
@@ -142,29 +127,12 @@ class AgentLoop:
                     }
                     action["meta"] = action_meta
 
-                    self._log_action("actions", {
-                        "type": "action_log",
-                        "turn": self.turn,
-                        "action": action.get("type", "unknown"),
-                        "path": action.get("path", ""),
-                        "command": action.get("command", ""),
-                        "pre_execution": True,
-                    })
-
                     try:
                         result = self.executor.execute_sync(action)
                     except Exception as e:
                         result = {"error": str(e)}
 
-                    self._log_action("actions", {
-                        "type": "action_result",
-                        "turn": self.turn,
-                        "action": action.get("type", "unknown"),
-                        "path": action.get("path", ""),
-                        "command": action.get("command", ""),
-                        "result": result,
-                        "post_execution": True,
-                    })
+                    self._log_action_result(action, result)
 
             except (ConnectionError, OSError) as e:
                 print(f"[agent] Connection lost: {e}", file=sys.stderr)

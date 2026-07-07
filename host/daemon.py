@@ -54,8 +54,207 @@ class HostDaemon:
         self._conversation: list[dict[str, str]] = []
         self._pending_results: list[dict[str, Any]] = []
         self._last_activity: float = time.time()
+        self._last_archived_turn: int = 0
 
         self._load_state()
+
+    # ── Conversation logging ──────────────────────────────────────────
+
+    def _log_conversation_turn(
+        self,
+        turn: int,
+        user_content: str,
+        assistant_content: str,
+    ) -> None:
+        """Log a complete turn (user + assistant) to the conversation log."""
+        conv_dir = self.config.log_dir / "conversations"
+        conv_dir.mkdir(parents=True, exist_ok=True)
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        log_path = conv_dir / f"{today}.jsonl"
+        entry = {
+            "type": "conversation_turn",
+            "turn": turn,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "user": user_content,
+            "assistant": assistant_content,
+            "model": self.config.model,
+        }
+        with open(log_path, "a") as f:
+            f.write(json.dumps(entry, default=str) + "\n")
+
+    def _archive_conversation(self) -> None:
+        """Save full conversation as a complete archive log, then clear.
+
+        Only archives if new turns exist since last archive.
+        """
+        msg_count = len(self._conversation)
+        current_turn = self._agent_state.get("turn", 0)
+        if msg_count <= 1 or current_turn <= self._last_archived_turn:
+            return
+
+        archive_dir = self.config.log_dir / "conversations"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
+        archive_path = archive_dir / f"archive_{ts}.json"
+
+        archive = {
+            "type": "conversation_archive",
+            "turn": current_turn,
+            "start_time": self.config.start_time,
+            "archived_at": datetime.now(timezone.utc).isoformat(),
+            "model": self.config.model,
+            "message_count": msg_count,
+            "last_archived_turn": self._last_archived_turn,
+            "conversation": list(self._conversation),
+        }
+        archive_path.write_text(json.dumps(archive, indent=2, default=str))
+        self._last_archived_turn = current_turn
+
+        self.logger.write("updates", {
+            "type": "conversation_archive",
+            "turn": current_turn,
+            "archived_to": archive_path.name,
+            "message_count": msg_count,
+        })
+
+    def _restore_from_archives(self) -> list[dict[str, str]]:
+        """Reconstruct conversation from archive + turn logs.
+
+        Used when state.json conversation is missing/corrupted.
+        Returns the reconstructed conversation list.
+        """
+        conv_dir = self.config.log_dir / "conversations"
+        if not conv_dir.is_dir():
+            return []
+
+        # Collect all turn entries from jsonl logs, sorted by turn
+        turns: list[dict[str, Any]] = []
+        for f in sorted(conv_dir.glob("*.jsonl")):
+            try:
+                for line in f.read_text().splitlines():
+                    if not line.strip():
+                        continue
+                    entry = json.loads(line)
+                    if entry.get("type") == "conversation_turn":
+                        turns.append(entry)
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        # Also load full archives
+        archives: list[dict[str, Any]] = []
+        for f in sorted(conv_dir.glob("archive_*.json")):
+            try:
+                archives.append(json.loads(f.read_text()))
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        # Merge: start with most recent archive's conversation, then append turns
+        reconstructed: list[dict[str, str]] = []
+        if archives:
+            reconstructed = list(archives[-1]["conversation"])
+
+        # Deduplicate turns already in archive
+        existing_turns: set[int] = set()
+        for m in reconstructed:
+            if m.get("role") == USER:
+                existing_turns.add(
+                    archives[-1].get("turn", 0) - len(reconstructed)
+                )
+
+        # Filter to entries newer than the archive
+        archive_turn = archives[-1].get("turn", 0) if archives else 0
+        for t in turns:
+            if t["turn"] > archive_turn:
+                reconstructed.append({"role": USER, "content": t["user"]})
+                reconstructed.append({"role": ASSISTANT, "content": t["assistant"]})
+
+        return reconstructed
+
+    # ── State persistence ─────────────────────────────────────────────
+
+    def _load_state(self) -> None:
+        state_file = self.config.state_dir / "state.json"
+        if state_file.exists():
+            try:
+                saved = json.loads(state_file.read_text())
+                self._agent_state = saved.get("agent", {})
+                self._ring.extend(saved.get("recent_logs", []))
+                self._last_archived_turn = saved.get("last_archived_turn", 0)
+                conv = saved.get("conversation", [])
+                if conv:
+                    self._conversation = conv
+                else:
+                    self._init_conversation()
+                    self._restore_from_logs()
+            except (json.JSONDecodeError, OSError):
+                self._init_conversation()
+                self._restore_from_logs()
+        else:
+            self._init_conversation()
+
+    def _restore_from_logs(self) -> None:
+        """Fill conversation with archived turns up to 3/4 of context budget.
+
+        Called when state.json has no conversation. Reads daily conversation
+        logs from logs/conversations/*.jsonl and fills the working conversation
+        with recent turns, oldest-first, up to ~75% of the context budget.
+        """
+        conv_dir = self.config.log_dir / "conversations"
+        if not conv_dir.is_dir():
+            return
+
+        # Collect all turn entries from daily jsonl logs, newest first
+        all_turns: list[dict] = []
+        for f in sorted(conv_dir.glob("*.jsonl"), reverse=True):
+            try:
+                for line in f.read_text().splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    entry = json.loads(line)
+                    if entry.get("user") and entry.get("assistant") and entry.get("turn"):
+                        all_turns.append(entry)
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        if not all_turns:
+            return
+
+        all_turns.sort(key=lambda e: e["turn"])  # oldest first
+
+        budget = self.ollama.max_input_chars(self.config.context_budget_ratio)
+        fill_budget = int(budget * 0.75)
+        sys_len = len(self._conversation[0]["content"]) if self._conversation else 0
+        available = fill_budget - sys_len
+        if available <= 0:
+            return
+
+        selected: list[dict] = []
+        added = 0
+        # Start from the newest turns, pick what fits, collect in a list
+        for entry in reversed(all_turns):
+            user_len = len(entry.get("user", ""))
+            asst_len = len(entry.get("assistant", ""))
+            pair_size = user_len + asst_len + 64
+            if pair_size > available and added > 0:
+                break
+            if pair_size > available:
+                continue
+            available -= pair_size
+            selected.append(entry)
+            added += 1
+
+        # Insert selected turns in chronological order (oldest first)
+        for i, entry in enumerate(reversed(selected)):
+            idx = 1 + i * 2
+            self._conversation.insert(idx, {"role": USER, "content": entry["user"]})
+            self._conversation.insert(idx + 1, {"role": ASSISTANT, "content": entry["assistant"]})
+
+        if added:
+            print(
+                f"[host] Restored {added} turns from archives ({fill_budget - available:,}/{fill_budget:,} chars)",
+                file=sys.stderr,
+            )
 
     # ── Conversation management ──────────────────────────────────────
 
@@ -95,6 +294,7 @@ class HostDaemon:
             and self._conversation[0]["role"] == SYSTEM
         )
         while self._conversation_chars() > budget and len(self._conversation) > 2:
+            self._archive_conversation()
             idx = 1 if has_system else 0
             self._conversation.pop(idx)
 
@@ -117,25 +317,6 @@ class HostDaemon:
                 "model": self.config.model,
             })
 
-    # ── State persistence ────────────────────────────────────────────
-
-    def _load_state(self) -> None:
-        state_file = self.config.state_dir / "state.json"
-        if state_file.exists():
-            try:
-                saved = json.loads(state_file.read_text())
-                self._agent_state = saved.get("agent", {})
-                self._ring.extend(saved.get("recent_logs", []))
-                conv = saved.get("conversation", [])
-                if conv:
-                    self._conversation = conv
-                else:
-                    self._init_conversation()
-            except (json.JSONDecodeError, OSError):
-                self._init_conversation()
-        else:
-            self._init_conversation()
-
     def _save_state(self) -> None:
         self.config.state_dir.mkdir(parents=True, exist_ok=True)
         state = {
@@ -145,6 +326,7 @@ class HostDaemon:
             "agent": self._agent_state,
             "recent_logs": list(self._ring),
             "conversation": self._conversation,
+            "last_archived_turn": self._last_archived_turn,
         }
         (self.config.state_dir / "state.json").write_text(
             json.dumps(state, indent=2, default=str)
@@ -297,6 +479,7 @@ class HostDaemon:
         )
 
         self._add_assistant_message(response)
+        self._log_conversation_turn(turn, user_content, response)
         self._trim_conversation()
 
         thinking, reflection = parse_tags(response)
@@ -400,6 +583,7 @@ class HostDaemon:
                     break
 
     def _cleanup(self) -> None:
+        self._archive_conversation()
         self._save_state()
         try:
             os.unlink(self.config.socket_path)
@@ -412,6 +596,7 @@ class HostDaemon:
         except (OSError, AttributeError):
             pass
         try:
+            self._archive_conversation()
             self._save_state()
         except Exception:
             pass

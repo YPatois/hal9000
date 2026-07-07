@@ -32,8 +32,12 @@ class OllamaClient:
                 resp.raise_for_status()
                 data = resp.json()
             info = data.get("model_info", {}) or {}
-            raw = info.get("llama.context_length", info.get("llama.context_length", 0))
-            if raw and isinstance(raw, (int, float)):
+            raw = 0
+            for k, v in info.items():
+                if k.endswith(".context_length") and isinstance(v, (int, float)) and v:
+                    raw = int(v)
+                    break
+            if raw:
                 return int(raw)
             return FALLBACK_CONTEXT_LENGTH
         except Exception:
